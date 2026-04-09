@@ -155,7 +155,12 @@ const RoomVisualizer = () => {
                 setRoomImage(inpaintedDataUrl)
             } catch (err: any) {
                 console.error('Inpainting failed:', err)
-                alert(`Magic Eraser failed: ${err.message}`)
+                const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
+                const maskedToken = HF_TOKEN 
+                    ? `${HF_TOKEN.substring(0, 5)}...${HF_TOKEN.substring(HF_TOKEN.length - 4)}` 
+                    : 'MISSING'
+                
+                alert(`Magic Eraser Error: ${err.message}\n\nToken Debug: ${maskedToken}\n(Please ensure this matches your HuggingFace Token and VITE_HF_TOKEN is set in Vercel)`)
             } finally {
                 setIsProcessingErase(false)
             }
