@@ -17,7 +17,7 @@ import {
     Loader2
 } from 'lucide-react'
 import { fabric } from 'fabric'
-import { removeBackground } from '@imgly/background-removal'
+import { removeBackground, Config } from '@imgly/background-removal'
 
 interface VisualizerControlsProps {
     selectedObject: fabric.Object | null
@@ -35,6 +35,10 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     const [isRemovingBg, setIsRemovingBg] = useState(false)
     const [productImages, setProductImages] = useState<string[]>([])
     const [currentImageIndex, setCurrentImageIndex] = useState(0)
+    
+    // 3D Perspective States
+    const [skewX, setSkewX] = useState(0)
+    const [skewY, setSkewY] = useState(0)
 
     useEffect(() => {
         if (selectedObject) {
@@ -56,12 +60,18 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                 const currentOriginalUrl = (selectedObject as any).originalUrl
                 const idx = data.images.indexOf(currentOriginalUrl)
                 setCurrentImageIndex(idx !== -1 ? idx : 0)
+                
+                // Set initial perspectives
+                setSkewX(selectedObject.skewX || 0)
+                setSkewY(selectedObject.skewY || 0)
             } else {
                 setProductImages([])
             }
         } else {
             setProductImages([])
             setCurrentImageIndex(0)
+            setSkewX(0)
+            setSkewY(0)
         }
     }, [selectedObject])
 
@@ -130,6 +140,19 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         }
     }
 
+    const updatePerspective = (type: 'skewX' | 'skewY', val: number) => {
+        if (selectedObject) {
+            if (type === 'skewX') {
+                selectedObject.set({ skewX: val })
+                setSkewX(val)
+            } else {
+                selectedObject.set({ skewY: val })
+                setSkewY(val)
+            }
+            onUpdate()
+        }
+    }
+
     const bringForward = () => {
         if (selectedObject) {
             selectedObject.bringForward()
@@ -163,6 +186,8 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             const scaleY = selectedObject.scaleY
             const angle = selectedObject.angle
             const shadow = selectedObject.shadow
+            const currentSkewX = selectedObject.skewX || 0
+            const currentSkewY = selectedObject.skewY || 0
 
             fabric.Image.fromURL(url, (newImg) => {
                 newImg.set({
@@ -172,6 +197,8 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     scaleY,
                     angle,
                     shadow,
+                    skewX: currentSkewX,
+                    skewY: currentSkewY,
                     cornerStyle: 'circle',
                     cornerColor: '#4A3728',
                     transparentCorners: false,
@@ -205,8 +232,14 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
 
         setIsRemovingBg(true)
         try {
-            // High-tech AI background removal client side
-            const blob = await removeBackground(originalUrl)
+            // High-tech AI background removal client side (optimized config to prevent freezing)
+            const config: Config = {
+                model: 'isnet_quint8', // Use quantized 8-bit model for much faster load and lower RAM usage, preventing browser freeze
+                debug: false
+            }
+            
+            // Note: processing can take a few seconds on first run due to WASM network fetching.
+            const blob = await removeBackground(originalUrl, config)
             const url = URL.createObjectURL(blob)
             
             const canvas = selectedObject.canvas
@@ -423,6 +456,45 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                         onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
                         className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
                     />
+                </div>
+
+                {/* 3D Perspective Controls */}
+                <div>
+                    <h4 className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase font-bold text-brand-dark mb-6">
+                        <Box size={14} className="opacity-40" /> 3D Perspective Adjust
+                    </h4>
+                    <div className="space-y-6">
+                        <div className="space-y-3">
+                            <div className="flex justify-between text-[9px] uppercase tracking-widest opacity-40">
+                                <span>Horizontal Skew (Side Angle)</span>
+                                <span>{skewX}°</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="-45"
+                                max="45"
+                                step="1"
+                                value={skewX}
+                                onChange={(e) => updatePerspective('skewX', parseFloat(e.target.value))}
+                                className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
+                            />
+                        </div>
+                        <div className="space-y-3">
+                            <div className="flex justify-between text-[9px] uppercase tracking-widest opacity-40">
+                                <span>Vertical Skew (Top/Bottom Angle)</span>
+                                <span>{skewY}°</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="-45"
+                                max="45"
+                                step="1"
+                                value={skewY}
+                                onChange={(e) => updatePerspective('skewY', parseFloat(e.target.value))}
+                                className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 {/* Depth & Order */}
