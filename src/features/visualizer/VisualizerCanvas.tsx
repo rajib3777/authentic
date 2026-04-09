@@ -46,24 +46,37 @@ export const VisualizerCanvas = ({ imageUrl, onCanvasReady }: VisualizerCanvasPr
             canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas))
         }, { crossOrigin: 'anonymous' })
 
-        // Smart Scaling Logic: Simulating 3D Depth
+        // Smart Scaling & Direction Logic: Simulating 3D Depth & Perspective Auto-Shift
         canvas.on('object:moving', (e) => {
             const obj = e.target
             if (!obj || obj.type === 'line' || (obj as any).isBackground) return
 
-            // Calculate scale based on Y position
-            // Higher up = Farther away = Smaller
-            // Lower down = Closer = Larger
+            // --- Depth Scaling (Y axis) ---
             const canvasHeight = canvas.height || 600
             const baseYScale = (obj as any).baseScale || 0.4
-
-            // Normalize Y position (0 at top, 1 at bottom)
             const normalizedY = obj.top! / canvasHeight
-
-            // Perspective factor: 0.7 at top, 1.3 at bottom
             const perspectiveFactor = 0.7 + (normalizedY * 0.6)
-
+            
+            // Apply scale
             obj.scale(baseYScale * perspectiveFactor)
+
+            // --- Perspective Auto-Contouring (X axis direction shift) ---
+            const canvasWidth = canvas.width || 800
+            const xCenter = canvasWidth / 2
+            
+            // Provide a small deadzone in the dead center where it stays neutral
+            if (obj.left! < xCenter - 50) {
+                // Left side placement -> mirror to face inward toward center
+                obj.set('flipX', true)
+                obj.set('skewY', -2)
+            } else if (obj.left! > xCenter + 50) {
+                // Right side placement -> normal facing inward toward center
+                obj.set('flipX', false)
+                obj.set('skewY', 2)
+            } else {
+                // Center placement -> neutral
+                obj.set('skewY', 0)
+            }
         })
 
         // When an object is added, we set its base scale
