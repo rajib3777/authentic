@@ -108,7 +108,6 @@ const RoomVisualizer = () => {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:h-[75vh]">
-                        {/* Sidebar Left: Products */}
                         <div className="lg:col-span-3 h-full overflow-hidden">
                             <VisualizerSidebar onAdd={(product) => {
                                 // Logic to add to fabric canvas
@@ -121,8 +120,10 @@ const RoomVisualizer = () => {
                                             cornerStyle: 'circle',
                                             cornerColor: '#4A3728',
                                             transparentCorners: false,
-                                            borderColor: '#4A3728'
-                                        })
+                                            borderColor: '#4A3728',
+                                            productData: product,
+                                            originalUrl: product.images[0]
+                                        } as any)
                                         canvasRef.current?.add(img)
                                         canvasRef.current?.setActiveObject(img)
                                     }, { crossOrigin: 'anonymous' })

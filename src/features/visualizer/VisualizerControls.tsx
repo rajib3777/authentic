@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
     Maximize2,
     RotateCw,
@@ -11,9 +11,13 @@ import {
     Box,
     Cloudy,
     ThermometerSun,
-    Move
+    Move,
+    Sparkles,
+    Image as ImageIcon,
+    Loader2
 } from 'lucide-react'
 import { fabric } from 'fabric'
+import { removeBackground } from '@imgly/background-removal'
 
 interface VisualizerControlsProps {
     selectedObject: fabric.Object | null
@@ -26,6 +30,11 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     const [shadowOpacity, setShadowOpacity] = useState(0.5)
     const [brightness, setBrightness] = useState(0)
     const [warmth, setWarmth] = useState(0)
+    
+    // Custom states for the AI and Gallery features
+    const [isRemovingBg, setIsRemovingBg] = useState(false)
+    const [productImages, setProductImages] = useState<string[]>([])
+    const [currentImageIndex, setCurrentImageIndex] = useState(0)
 
     useEffect(() => {
         if (selectedObject) {
@@ -38,6 +47,21 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             } else {
                 setShadowBlur(0)
             }
+
+            // Extract custom data if any
+            const data = (selectedObject as any).productData
+            if (data && data.images) {
+                setProductImages(data.images)
+                // Determine current angle by comparing originalUrl
+                const currentOriginalUrl = (selectedObject as any).originalUrl
+                const idx = data.images.indexOf(currentOriginalUrl)
+                setCurrentImageIndex(idx !== -1 ? idx : 0)
+            } else {
+                setProductImages([])
+            }
+        } else {
+            setProductImages([])
+            setCurrentImageIndex(0)
         }
     }, [selectedObject])
 
@@ -127,6 +151,112 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         }
     }
 
+    const changeAngle = (url: string, index: number) => {
+        if (selectedObject && selectedObject instanceof fabric.Image) {
+            const canvas = selectedObject.canvas
+            if (!canvas) return
+
+            setCurrentImageIndex(index)
+            const left = selectedObject.left
+            const top = selectedObject.top
+            const scaleX = selectedObject.scaleX
+            const scaleY = selectedObject.scaleY
+            const angle = selectedObject.angle
+            const shadow = selectedObject.shadow
+
+            fabric.Image.fromURL(url, (newImg) => {
+                newImg.set({
+                    left,
+                    top,
+                    scaleX,
+                    scaleY,
+                    angle,
+                    shadow,
+                    cornerStyle: 'circle',
+                    cornerColor: '#4A3728',
+                    transparentCorners: false,
+                    borderColor: '#4A3728',
+                    productData: (selectedObject as any).productData,
+                    originalUrl: url
+                } as any)
+                
+                // Copy filters
+                const oldImg = selectedObject as fabric.Image
+                if (oldImg.filters && oldImg.filters.length > 0) {
+                    newImg.filters = [...oldImg.filters]
+                    newImg.applyFilters()
+                }
+
+                const objIndex = canvas.getObjects().indexOf(selectedObject)
+                canvas.remove(selectedObject)
+                canvas.insertAt(newImg, objIndex, false)
+                canvas.setActiveObject(newImg)
+                canvas.renderAll()
+                onUpdate()
+            }, { crossOrigin: 'anonymous' })
+        }
+    }
+
+    const handleRemoveBackground = async () => {
+        if (!selectedObject || !(selectedObject instanceof fabric.Image)) return
+        
+        const originalUrl = (selectedObject as any).originalUrl
+        if (!originalUrl) return
+
+        setIsRemovingBg(true)
+        try {
+            // High-tech AI background removal client side
+            const blob = await removeBackground(originalUrl)
+            const url = URL.createObjectURL(blob)
+            
+            const canvas = selectedObject.canvas
+            if (!canvas) return
+
+            const left = selectedObject.left
+            const top = selectedObject.top
+            const scaleX = selectedObject.scaleX
+            const scaleY = selectedObject.scaleY
+            const angle = selectedObject.angle
+            const shadow = selectedObject.shadow
+
+            fabric.Image.fromURL(url, (newImg) => {
+                newImg.set({
+                    left,
+                    top,
+                    scaleX: scaleX,
+                    scaleY: scaleY,
+                    angle,
+                    shadow,
+                    cornerStyle: 'circle',
+                    cornerColor: '#4A3728',
+                    transparentCorners: false,
+                    borderColor: '#4A3728',
+                    productData: (selectedObject as any).productData,
+                    originalUrl: originalUrl // keep the original URL so we know what angle we are on
+                } as any)
+
+                // Copy filters
+                const oldImg = selectedObject as fabric.Image
+                if (oldImg.filters && oldImg.filters.length > 0) {
+                    newImg.filters = [...oldImg.filters]
+                    newImg.applyFilters()
+                }
+
+                const objIndex = canvas.getObjects().indexOf(selectedObject)
+                canvas.remove(selectedObject)
+                canvas.insertAt(newImg, objIndex, false)
+                canvas.setActiveObject(newImg)
+                canvas.renderAll()
+                onUpdate()
+            })
+        } catch (error) {
+            console.error("Failed to remove background:", error)
+            alert("Failed to remove background. Please try another image.")
+        } finally {
+            setIsRemovingBg(false)
+        }
+    }
+
     if (!selectedObject) {
         return (
             <div className="h-full bg-white rounded-[32px] border border-brand-dark/5 shadow-soft p-10 flex flex-col items-center justify-center text-center">
@@ -134,6 +264,11 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     <Maximize2 className="text-brand-dark/10" size={24} />
                 </div>
                 <p className="text-sm font-outfit text-brand-dark/30 uppercase tracking-[0.1em]">Select an object to unlock Realism Engine</p>
+                <div className="mt-8 flex justify-center space-x-2">
+                     <span className="h-1.5 w-1.5 rounded-full bg-brand-dark/20 animate-pulse"></span>
+                     <span className="h-1.5 w-1.5 rounded-full bg-brand-dark/20 animate-pulse" style={{animationDelay: '150ms'}}></span>
+                     <span className="h-1.5 w-1.5 rounded-full bg-brand-dark/20 animate-pulse" style={{animationDelay: '300ms'}}></span>
+                </div>
             </div>
         )
     }
@@ -141,13 +276,63 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     return (
         <div className="h-full bg-white rounded-[32px] border border-brand-dark/5 shadow-soft p-8 overflow-y-auto custom-scrollbar">
             <div className="mb-10 flex items-center justify-between">
-                <h3 className="text-[10px] font-bold tracking-[0.3em] uppercase text-brand-dark/40">Realism Engine v1.0</h3>
+                <h3 className="text-[10px] font-bold tracking-[0.3em] uppercase text-brand-dark/40">Realism Engine v2.0</h3>
                 <button onClick={removeObject} className="text-red-500 hover:text-red-600 transition-colors p-2 bg-red-50 rounded-lg">
                     <Trash2 size={16} />
                 </button>
             </div>
 
             <div className="space-y-10">
+
+                {/* AI Features */}
+                <div>
+                    <h4 className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase font-bold text-violet-600 mb-4">
+                        <Sparkles size={14} /> AI Processing
+                    </h4>
+                    <button
+                        onClick={handleRemoveBackground}
+                        disabled={isRemovingBg}
+                        className="w-full relative overflow-hidden group bg-gradient-to-tr from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-2xl p-4 flex items-center justify-center gap-3 transition-all shadow-lg shadow-indigo-500/30 disabled:opacity-70 disabled:cursor-not-allowed"
+                    >
+                        {isRemovingBg ? (
+                            <>
+                                <Loader2 size={18} className="animate-spin" />
+                                <span className="text-[11px] uppercase tracking-widest font-bold">Extracting Object...</span>
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={18} />
+                                <span className="text-[11px] uppercase tracking-widest font-bold">Smart Background Erase</span>
+                            </>
+                        )}
+                        {/* Shimmer effect */}
+                        <div className="absolute inset-0 -translate-x-[150%] bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:animate-[shimmer_1.5s_infinite]" />
+                    </button>
+                </div>
+
+                {/* Angles/Variants */}
+                {productImages.length > 1 && (
+                    <div>
+                        <h4 className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase font-bold text-brand-dark mb-4">
+                            <ImageIcon size={14} className="opacity-40" /> Switch Angles
+                        </h4>
+                        <div className="flex gap-3 overflow-x-auto pb-2 custom-scrollbar">
+                            {productImages.map((imgUrl, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => changeAngle(imgUrl, idx)}
+                                    className={`relative flex-shrink-0 w-16 h-16 rounded-xl overflow-hidden border-2 transition-all ${currentImageIndex === idx ? 'border-brand-dark shadow-md' : 'border-transparent hover:border-brand-dark/30'}`}
+                                >
+                                    <img src={imgUrl} alt={`Angle ${idx + 1}`} className="w-full h-full object-cover bg-brand-cream/50" />
+                                    {currentImageIndex === idx && (
+                                        <div className="absolute inset-0 bg-brand-dark/5" />
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 {/* Shadow Engine */}
                 <div>
                     <h4 className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase font-bold text-brand-dark mb-6">
@@ -267,3 +452,5 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         </div>
     )
 }
+
+export default VisualizerControls
