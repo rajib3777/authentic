@@ -17,6 +17,7 @@ import {
     Loader2
 } from 'lucide-react'
 import { fabric } from 'fabric'
+import { removeBackground } from '@imgly/background-removal'
 
 interface VisualizerControlsProps {
     selectedObject: fabric.Object | null
@@ -30,14 +31,10 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     const [brightness, setBrightness] = useState(0)
     const [warmth, setWarmth] = useState(0)
     
-    // Custom states
+    // Custom states for the AI and Gallery features
     const [isRemovingBg, setIsRemovingBg] = useState(false)
     const [productImages, setProductImages] = useState<string[]>([])
     const [currentImageIndex, setCurrentImageIndex] = useState(0)
-    
-    // 3D Perspective States
-    const [skewX, setSkewX] = useState(0)
-    const [skewY, setSkewY] = useState(0)
 
     useEffect(() => {
         if (selectedObject) {
@@ -46,27 +43,25 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             const currentShadow = selectedObject.shadow as fabric.Shadow
             if (currentShadow) {
                 setShadowBlur(currentShadow.blur || 0)
+                // We keep track of opacity locally for the slider
             } else {
                 setShadowBlur(0)
             }
 
+            // Extract custom data if any
             const data = (selectedObject as any).productData
             if (data && data.images) {
                 setProductImages(data.images)
+                // Determine current angle by comparing originalUrl
                 const currentOriginalUrl = (selectedObject as any).originalUrl
                 const idx = data.images.indexOf(currentOriginalUrl)
                 setCurrentImageIndex(idx !== -1 ? idx : 0)
-                
-                setSkewX(selectedObject.skewX || 0)
-                setSkewY(selectedObject.skewY || 0)
             } else {
                 setProductImages([])
             }
         } else {
             setProductImages([])
             setCurrentImageIndex(0)
-            setSkewX(0)
-            setSkewY(0)
         }
     }, [selectedObject])
 
@@ -102,6 +97,7 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             applyOrUpdateFilter(img, 'Brightness', filter)
         } else if (type === 'warmth') {
             setWarmth(val)
+            // ColorMatrix for warmth (adjusting red and blue channels)
             const filter = new fabric.Image.filters.ColorMatrix({
                 matrix: [
                     1 + val, 0, 0, 0, 0,
@@ -130,19 +126,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         if (selectedObject) {
             selectedObject.set({ opacity: val })
             setOpacity(val)
-            onUpdate()
-        }
-    }
-
-    const updatePerspective = (type: 'skewX' | 'skewY', val: number) => {
-        if (selectedObject) {
-            if (type === 'skewX') {
-                selectedObject.set({ skewX: val })
-                setSkewX(val)
-            } else {
-                selectedObject.set({ skewY: val })
-                setSkewY(val)
-            }
             onUpdate()
         }
     }
@@ -180,8 +163,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             const scaleY = selectedObject.scaleY
             const angle = selectedObject.angle
             const shadow = selectedObject.shadow
-            const currentSkewX = selectedObject.skewX || 0
-            const currentSkewY = selectedObject.skewY || 0
 
             fabric.Image.fromURL(url, (newImg) => {
                 newImg.set({
@@ -191,8 +172,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     scaleY,
                     angle,
                     shadow,
-                    skewX: currentSkewX,
-                    skewY: currentSkewY,
                     cornerStyle: 'circle',
                     cornerColor: '#4A3728',
                     transparentCorners: false,
@@ -201,6 +180,7 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     originalUrl: url
                 } as any)
                 
+                // Copy filters
                 const oldImg = selectedObject as fabric.Image
                 if (oldImg.filters && oldImg.filters.length > 0) {
                     newImg.filters = [...oldImg.filters]
@@ -220,45 +200,13 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     const handleRemoveBackground = async () => {
         if (!selectedObject || !(selectedObject instanceof fabric.Image)) return
         
-        const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
-        if (!HF_TOKEN) {
-            alert("HuggingFace Token not set. Background removal requires AI configuration.")
-            return
-        }
+        const originalUrl = (selectedObject as any).originalUrl
+        if (!originalUrl) return
 
         setIsRemovingBg(true)
         try {
-            // 1. Get image data directly from Canvas (Bypasses Source CORS issues)
-            const dataUrl = selectedObject.toDataURL({ format: 'png', multiplier: 1 })
-            const base64Data = dataUrl.split(',')[1]
-            
-            // 2. Convert to Blob for the AI Model
-            const toBlob = (b64: string): Blob => {
-                const byteChars = atob(b64)
-                const byteNums = new Array(byteChars.length)
-                for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i)
-                return new Blob([new Uint8Array(byteNums)], { type: 'image/png' })
-            }
-
-            // 3. High-fidelity AI background removal via BRIA AI (RMBG-2.0)
-            const response = await fetch(
-                'https://api-inference.huggingface.co/models/briaai/RMBG-2.0',
-                {
-                    method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${HF_TOKEN}`,
-                        'x-wait-for-model': 'true'
-                    },
-                    body: toBlob(base64Data)
-                }
-            )
-
-            if (!response.ok) {
-                const errorText = await response.text()
-                throw new Error(errorText || `API Error ${response.status}`)
-            }
-
-            const blob = await response.blob()
+            // High-tech AI background removal client side
+            const blob = await removeBackground(originalUrl)
             const url = URL.createObjectURL(blob)
             
             const canvas = selectedObject.canvas
@@ -270,30 +218,27 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             const scaleY = selectedObject.scaleY
             const angle = selectedObject.angle
             const shadow = selectedObject.shadow
-            const skewXValue = selectedObject.skewX || 0
-            const skewYValue = selectedObject.skewY || 0
 
             fabric.Image.fromURL(url, (newImg) => {
                 newImg.set({
                     left,
                     top,
-                    scaleX,
-                    scaleY,
+                    scaleX: scaleX,
+                    scaleY: scaleY,
                     angle,
                     shadow,
-                    skewX: skewXValue,
-                    skewY: skewYValue,
                     cornerStyle: 'circle',
                     cornerColor: '#4A3728',
                     transparentCorners: false,
                     borderColor: '#4A3728',
                     productData: (selectedObject as any).productData,
-                    originalUrl: url 
+                    originalUrl: originalUrl // keep the original URL so we know what angle we are on
                 } as any)
 
+                // Copy filters
                 const oldImg = selectedObject as fabric.Image
                 if (oldImg.filters && oldImg.filters.length > 0) {
-                    newImg.filters = [...oldImg.filters.filter(f => (f as any).type !== 'RemoveColor')]
+                    newImg.filters = [...oldImg.filters]
                     newImg.applyFilters()
                 }
 
@@ -303,10 +248,10 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                 canvas.setActiveObject(newImg)
                 canvas.renderAll()
                 onUpdate()
-            }, { crossOrigin: 'anonymous' })
-        } catch (error: any) {
+            })
+        } catch (error) {
             console.error("Failed to remove background:", error)
-            alert(`AI Background Removal Error: ${error.message || 'Network error'}\n\nTip: Ensure VITE_HF_TOKEN is set in Vercel.`)
+            alert("Failed to remove background. Please try another image.")
         } finally {
             setIsRemovingBg(false)
         }
@@ -478,45 +423,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                         onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
                         className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
                     />
-                </div>
-
-                {/* 3D Perspective Controls */}
-                <div>
-                    <h4 className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase font-bold text-brand-dark mb-6">
-                        <Box size={14} className="opacity-40" /> 3D Perspective Adjust
-                    </h4>
-                    <div className="space-y-6">
-                        <div className="space-y-3">
-                            <div className="flex justify-between text-[9px] uppercase tracking-widest opacity-40">
-                                <span>Horizontal Skew (Side Angle)</span>
-                                <span>{skewX}°</span>
-                            </div>
-                            <input
-                                type="range"
-                                min="-45"
-                                max="45"
-                                step="1"
-                                value={skewX}
-                                onChange={(e) => updatePerspective('skewX', parseFloat(e.target.value))}
-                                className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
-                            />
-                        </div>
-                        <div className="space-y-3">
-                            <div className="flex justify-between text-[9px] uppercase tracking-widest opacity-40">
-                                <span>Vertical Skew (Top/Bottom Angle)</span>
-                                <span>{skewY}°</span>
-                            </div>
-                            <input
-                                type="range"
-                                min="-45"
-                                max="45"
-                                step="1"
-                                value={skewY}
-                                onChange={(e) => updatePerspective('skewY', parseFloat(e.target.value))}
-                                className="w-full accent-brand-dark h-1 bg-brand-cream rounded-full appearance-none cursor-pointer"
-                            />
-                        </div>
-                    </div>
                 </div>
 
                 {/* Depth & Order */}
