@@ -84,7 +84,7 @@ const RoomVisualizer = () => {
 
     // Call HuggingFace Stable Diffusion Inpainting via official SDK
     const applyRemoteInpainting = async (canvas: fabric.Canvas, originalRoomImage: string): Promise<string> => {
-        const HF_TOKEN = import.meta.env.VITE_HF_TOKEN as string
+        const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
 
         if (!HF_TOKEN) {
             throw new Error('HuggingFace API token is not set. Please add VITE_HF_TOKEN to your environment variables.')
