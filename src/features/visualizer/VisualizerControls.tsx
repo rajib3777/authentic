@@ -226,12 +226,21 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             return
         }
 
-        const originalUrl = (selectedObject as any).originalUrl
-        if (!originalUrl) return
-
         setIsRemovingBg(true)
         try {
-            // High-fidelity AI background removal via BRIA AI (RMBG-2.0)
+            // 1. Get image data directly from Canvas (Bypasses Source CORS issues)
+            const dataUrl = selectedObject.toDataURL({ format: 'png', multiplier: 1 })
+            const base64Data = dataUrl.split(',')[1]
+            
+            // 2. Convert to Blob for the AI Model
+            const toBlob = (b64: string): Blob => {
+                const byteChars = atob(b64)
+                const byteNums = new Array(byteChars.length)
+                for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i)
+                return new Blob([new Uint8Array(byteNums)], { type: 'image/png' })
+            }
+
+            // 3. High-fidelity AI background removal via BRIA AI (RMBG-2.0)
             const response = await fetch(
                 'https://api-inference.huggingface.co/models/briaai/RMBG-2.0',
                 {
@@ -240,13 +249,13 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                         Authorization: `Bearer ${HF_TOKEN}`,
                         'x-wait-for-model': 'true'
                     },
-                    body: await (await fetch(originalUrl)).blob()
+                    body: toBlob(base64Data)
                 }
             )
 
             if (!response.ok) {
-                const error = await response.text()
-                throw new Error(error || 'Failed to remove background')
+                const errorText = await response.text()
+                throw new Error(errorText || `API Error ${response.status}`)
             }
 
             const blob = await response.blob()
@@ -279,7 +288,7 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     transparentCorners: false,
                     borderColor: '#4A3728',
                     productData: (selectedObject as any).productData,
-                    originalUrl: url // save the NEW transparent URL as original
+                    originalUrl: url 
                 } as any)
 
                 const oldImg = selectedObject as fabric.Image
@@ -297,7 +306,7 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             }, { crossOrigin: 'anonymous' })
         } catch (error: any) {
             console.error("Failed to remove background:", error)
-            alert(`AI Background Removal Error: ${error.message || 'Model is loading, please try again in 20 seconds.'}`)
+            alert(`AI Background Removal Error: ${error.message || 'Network error'}\n\nTip: Ensure VITE_HF_TOKEN is set in Vercel.`)
         } finally {
             setIsRemovingBg(false)
         }
