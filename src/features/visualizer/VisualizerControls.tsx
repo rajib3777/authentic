@@ -217,30 +217,90 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         }
     }
 
-    const handleRemoveBackground = () => {
+    const handleRemoveBackground = async () => {
         if (!selectedObject || !(selectedObject instanceof fabric.Image)) return
         
+        const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
+        if (!HF_TOKEN) {
+            alert("HuggingFace Token not set. Background removal requires AI configuration.")
+            return
+        }
+
+        const originalUrl = (selectedObject as any).originalUrl
+        if (!originalUrl) return
+
         setIsRemovingBg(true)
-        setTimeout(() => {
-            try {
-                const img = selectedObject as fabric.Image
-                // Native FabricJS filter to remove background color (usually white/near-white)
-                // This is much faster and doesn't break the build
-                const filter = new (fabric.Image.filters as any).RemoveColor({
-                    color: '#FFFFFF',
-                    distance: 0.15
-                })
-                
-                img.filters = img.filters || []
-                applyOrUpdateFilter(img, 'RemoveColor', filter)
-                img.applyFilters()
-                onUpdate()
-            } catch (error) {
-                console.error("Failed to remove background:", error)
-            } finally {
-                setIsRemovingBg(false)
+        try {
+            // High-fidelity AI background removal via BRIA AI (RMBG-2.0)
+            const response = await fetch(
+                'https://api-inference.huggingface.co/models/briaai/RMBG-2.0',
+                {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${HF_TOKEN}`,
+                        'x-wait-for-model': 'true'
+                    },
+                    body: await (await fetch(originalUrl)).blob()
+                }
+            )
+
+            if (!response.ok) {
+                const error = await response.text()
+                throw new Error(error || 'Failed to remove background')
             }
-        }, 500)
+
+            const blob = await response.blob()
+            const url = URL.createObjectURL(blob)
+            
+            const canvas = selectedObject.canvas
+            if (!canvas) return
+
+            const left = selectedObject.left
+            const top = selectedObject.top
+            const scaleX = selectedObject.scaleX
+            const scaleY = selectedObject.scaleY
+            const angle = selectedObject.angle
+            const shadow = selectedObject.shadow
+            const skewXValue = selectedObject.skewX || 0
+            const skewYValue = selectedObject.skewY || 0
+
+            fabric.Image.fromURL(url, (newImg) => {
+                newImg.set({
+                    left,
+                    top,
+                    scaleX,
+                    scaleY,
+                    angle,
+                    shadow,
+                    skewX: skewXValue,
+                    skewY: skewYValue,
+                    cornerStyle: 'circle',
+                    cornerColor: '#4A3728',
+                    transparentCorners: false,
+                    borderColor: '#4A3728',
+                    productData: (selectedObject as any).productData,
+                    originalUrl: url // save the NEW transparent URL as original
+                } as any)
+
+                const oldImg = selectedObject as fabric.Image
+                if (oldImg.filters && oldImg.filters.length > 0) {
+                    newImg.filters = [...oldImg.filters.filter(f => (f as any).type !== 'RemoveColor')]
+                    newImg.applyFilters()
+                }
+
+                const objIndex = canvas.getObjects().indexOf(selectedObject)
+                canvas.remove(selectedObject)
+                canvas.insertAt(newImg, objIndex, false)
+                canvas.setActiveObject(newImg)
+                canvas.renderAll()
+                onUpdate()
+            }, { crossOrigin: 'anonymous' })
+        } catch (error: any) {
+            console.error("Failed to remove background:", error)
+            alert(`AI Background Removal Error: ${error.message || 'Model is loading, please try again in 20 seconds.'}`)
+        } finally {
+            setIsRemovingBg(false)
+        }
     }
 
     if (!selectedObject) {
