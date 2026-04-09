@@ -52,11 +52,47 @@ const RoomVisualizer = () => {
             // To simulate "erased background", we apply a heavy blur localized to the drawn area mask
             // In a real backend, we'd send `roomImage` + `maskData` and receive a new background image.
             
-            // Simulated local operation: We just remove the red paths and let the user know they need an API key
-            paths.forEach(p => canvasRef.current?.remove(p))
+            // Simulated AI Inpainting using Canvas Context localized blurring (Content-Aware fake)
+            const canvas = canvasRef.current
             
-            alert("Success! Magic Eraser mask extracted.\n\nNote: To actually generate the missing floor/wall textures, an active API Key using Replicate (SDXL) or Photoroom is required in your backend. For now, the mask footprint was captured flawlessly!")
-            setIsProcessingErase(false)
+            // Collect the paths
+            const pathGroup = new fabric.Group(paths, { selectable: false, evented: false });
+            
+            fabric.Image.fromURL(roomImage, (bgClone) => {
+                // Scale it exactly like the original background
+                const scaleX = canvas.width! / bgClone.width!
+                const scaleY = canvas.height! / bgClone.height!
+                const scale = Math.max(scaleX, scaleY)
+                
+                bgClone.set({
+                    scaleX: scale,
+                    scaleY: scale,
+                    left: canvas.width! / 2,
+                    top: canvas.height! / 2,
+                    originX: 'center',
+                    originY: 'center',
+                    selectable: false,
+                    evented: false,
+                })
+                
+                // Apply a heavy blur to smudge the background colors across the furniture
+                const blurFilter = new fabric.Image.filters.Blur({ blur: 0.8 });
+                bgClone.filters?.push(blurFilter);
+                bgClone.applyFilters();
+                
+                // Clip the blurred background copy to strictly the painted mask!
+                bgClone.clipPath = pathGroup;
+                
+                // Remove the raw red drawn paths
+                paths.forEach(p => canvas.remove(p));
+                
+                // Add the new "inpaint smudge" patch over the image
+                canvas.add(bgClone);
+                bgClone.sendToBack(); // but keep it above the actual background image
+                canvas.renderAll();
+                
+                setIsProcessingErase(false);
+            }, { crossOrigin: 'anonymous' })
 
         } else {
             // Turn ON drawing mode
