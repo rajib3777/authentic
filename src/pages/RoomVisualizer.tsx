@@ -28,81 +28,125 @@ const RoomVisualizer = () => {
     const canvasRef = useRef<fabric.Canvas | null>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
     
-    // Magic Eraser States
     const [isDrawingMode, setIsDrawingMode] = useState(false)
     const [isProcessingErase, setIsProcessingErase] = useState(false)
+    const [brushSize, setBrushSize] = useState(40)
+
+    // Core pixel-level inpainting: fills masked (red) pixels by iteratively
+    // averaging their non-masked neighbors. Runs multiple passes until filled.
+    const applyPixelInpainting = async (canvas: fabric.Canvas): Promise<string> => {
+        const W = canvas.width!
+        const H = canvas.height!
+
+        // Export full canvas (background + red paths) to an image
+        const dataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 })
+
+        // Draw exported image on an offscreen canvas
+        const offscreen = document.createElement('canvas')
+        offscreen.width = W
+        offscreen.height = H
+        const ctx = offscreen.getContext('2d', { willReadFrequently: true })!
+
+        await new Promise<void>((resolve) => {
+            const img = new Image()
+            img.onload = () => { ctx.drawImage(img, 0, 0, W, H); resolve() }
+            img.src = dataUrl
+        })
+
+        // Get pixel data
+        const imgData = ctx.getImageData(0, 0, W, H)
+        const data = imgData.data
+
+        // Identify masked pixels:
+        // The brush color was rgba(239, 68, 68, 0.5), which when composited on
+        // any pixel turns it noticeably more red than green/blue
+        const masked = new Uint8Array(W * H)
+        for (let i = 0; i < W * H; i++) {
+            const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2]
+            // Heuristic: strongly reddish pixel = mask
+            if (r > 160 && r - g > 60 && r - b > 60) {
+                masked[i] = 1
+            }
+        }
+
+        // Iterative inpainting: repeat until no un-filled masked pixels remain
+        // Each pass: for each masked pixel, average all non-masked neighbors
+        const PASSES = 80
+        for (let pass = 0; pass < PASSES; pass++) {
+            let changed = false
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    const idx = y * W + x
+                    if (!masked[idx]) continue
+
+                    let rSum = 0, gSum = 0, bSum = 0, count = 0
+                    // Sample 8-connected neighborhood
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            if (dx === 0 && dy === 0) continue
+                            const nx = x + dx, ny = y + dy
+                            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+                            const nIdx = ny * W + nx
+                            if (!masked[nIdx]) {
+                                rSum += data[nIdx * 4]
+                                gSum += data[nIdx * 4 + 1]
+                                bSum += data[nIdx * 4 + 2]
+                                count++
+                            }
+                        }
+                    }
+
+                    if (count > 0) {
+                        data[idx * 4]     = Math.round(rSum / count)
+                        data[idx * 4 + 1] = Math.round(gSum / count)
+                        data[idx * 4 + 2] = Math.round(bSum / count)
+                        data[idx * 4 + 3] = 255
+                        masked[idx] = 0   // Mark as filled so neighbors can use it
+                        changed = true
+                    }
+                }
+            }
+            if (!changed) break   // All masked pixels filled, stop early
+        }
+
+        ctx.putImageData(imgData, 0, 0)
+        return offscreen.toDataURL('image/png')
+    }
 
     const toggleMagicEraser = async () => {
-        if (!canvasRef.current || !roomImage) return;
+        if (!canvasRef.current || !roomImage) return
 
         if (isDrawingMode) {
-            // Apply Magic Eraser (Turn OFF drawing mode and process)
             setIsDrawingMode(false)
             canvasRef.current.isDrawingMode = false
-            
-            // Extract the paths drawn by the user to use as a mask
+
             const paths = canvasRef.current.getObjects('path')
-            if (paths.length === 0) return; // Nothing drawn
+            if (paths.length === 0) return
 
-            // Simulated AI API Processing Delay
             setIsProcessingErase(true)
-            
-            await new Promise(resolve => setTimeout(resolve, 3500)) // Fake 3.5s SDXL delay
 
-            // To simulate "erased background", we apply a heavy blur localized to the drawn area mask
-            // In a real backend, we'd send `roomImage` + `maskData` and receive a new background image.
-            
-            // Simulated AI Inpainting using Canvas Context localized blurring (Content-Aware fake)
-            const canvas = canvasRef.current
-            
-            // Collect the paths
-            const pathGroup = new fabric.Group(paths, { selectable: false, evented: false });
-            
-            fabric.Image.fromURL(roomImage, (bgClone) => {
-                // Scale it exactly like the original background
-                const scaleX = canvas.width! / bgClone.width!
-                const scaleY = canvas.height! / bgClone.height!
-                const scale = Math.max(scaleX, scaleY)
-                
-                bgClone.set({
-                    scaleX: scale,
-                    scaleY: scale,
-                    left: canvas.width! / 2,
-                    top: canvas.height! / 2,
-                    originX: 'center',
-                    originY: 'center',
-                    selectable: false,
-                    evented: false,
-                })
-                
-                // Apply a heavy blur to smudge the background colors across the furniture
-                const blurFilter = new fabric.Image.filters.Blur({ blur: 0.8 });
-                bgClone.filters?.push(blurFilter);
-                bgClone.applyFilters();
-                
-                // Clip the blurred background copy to strictly the painted mask!
-                bgClone.clipPath = pathGroup;
-                
-                // Remove the raw red drawn paths
-                paths.forEach(p => canvas.remove(p));
-                
-                // Add the new "inpaint smudge" patch over the image
-                canvas.add(bgClone);
-                bgClone.sendToBack(); // but keep it above the actual background image
-                canvas.renderAll();
-                
-                setIsProcessingErase(false);
-            }, { crossOrigin: 'anonymous' })
+            try {
+                // Run real pixel inpainting
+                const inpaintedDataUrl = await applyPixelInpainting(canvasRef.current)
 
+                // Remove the drawn brush paths
+                paths.forEach(p => canvasRef.current?.remove(p))
+                canvasRef.current.renderAll()
+
+                // Set the inpainted image as the new room background
+                // This triggers VisualizerCanvas to reload with the clean image
+                setRoomImage(inpaintedDataUrl)
+            } catch (err) {
+                console.error('Inpainting failed:', err)
+            } finally {
+                setIsProcessingErase(false)
+            }
         } else {
-            // Turn ON drawing mode
             setIsDrawingMode(true)
             canvasRef.current.isDrawingMode = true
-            
-            // Set brush thick and red (ruby color)
-            canvasRef.current.freeDrawingBrush = new fabric.PencilBrush(canvasRef.current);
-            canvasRef.current.freeDrawingBrush.color = 'rgba(239, 68, 68, 0.5)' // Red overlay
-            canvasRef.current.freeDrawingBrush.width = 40
+            canvasRef.current.freeDrawingBrush = new fabric.PencilBrush(canvasRef.current)
+            canvasRef.current.freeDrawingBrush.color = 'rgba(239, 68, 68, 0.85)'
+            canvasRef.current.freeDrawingBrush.width = brushSize
         }
     }
 
