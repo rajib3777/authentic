@@ -16,6 +16,7 @@ import { Card } from '@/components/ui/Card'
 import { PageTransition } from '@/components/layout/PageTransition'
 import { useProducts } from '@/services/api/productQueries'
 import { fabric } from 'fabric'
+import { HfInference } from '@huggingface/inference'
 
 // Inner components will be defined here or imported
 import { VisualizerCanvas } from '@/features/visualizer/VisualizerCanvas'
@@ -81,59 +82,54 @@ const RoomVisualizer = () => {
         })
     }
 
-    // Call HuggingFace Stable Diffusion Inpainting API
+    // Call HuggingFace Stable Diffusion Inpainting via official SDK
     const applyRemoteInpainting = async (canvas: fabric.Canvas, originalRoomImage: string): Promise<string> => {
         const HF_TOKEN = import.meta.env.VITE_HF_TOKEN as string
 
-        // SD Inpainting requires 512x512 or 768x768
-        const SIZE = 512
-
-        // Prepare image and mask (both resized to 512x512)
-        const [imageB64, maskB64] = await Promise.all([
-            resizeImageToBase64(originalRoomImage, SIZE, SIZE),
-            buildMaskBase64(canvas).then(async (rawMask) => {
-                // rawMask is already base64 at canvas resolution, resize it too
-                const maskDataUrl = `data:image/png;base64,${rawMask}`
-                return resizeImageToBase64(maskDataUrl, SIZE, SIZE)
-            })
-        ])
-
-        const response = await fetch(
-            'https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting',
-            {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${HF_TOKEN}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    inputs: 'empty room interior, clean floor, bare wall, no furniture, photorealistic, high quality, seamless',
-                    parameters: {
-                        image: imageB64,
-                        mask_image: maskB64,
-                        strength: 0.99,
-                        num_inference_steps: 25,
-                        guidance_scale: 7.5,
-                    },
-                }),
-            }
-        )
-
-        if (!response.ok) {
-            const errorBody = await response.text()
-            // Model might be loading (503), retry after delay
-            if (response.status === 503) {
-                throw new Error('Model is loading. Please wait 30 seconds and try again.')
-            }
-            throw new Error(`API error ${response.status}: ${errorBody}`)
+        if (!HF_TOKEN) {
+            throw new Error('HuggingFace API token is not set. Please add VITE_HF_TOKEN to your environment variables.')
         }
 
-        const blob = await response.blob()
+        const SIZE = 512
+
+        // Build B&W mask from drawn paths
+        const maskRawB64 = await buildMaskBase64(canvas)
+        const maskDataUrl = `data:image/png;base64,${maskRawB64}`
+
+        // Resize both to 512x512 — SD inpainting requires this
+        const [imageB64, maskB64] = await Promise.all([
+            resizeImageToBase64(originalRoomImage, SIZE, SIZE),
+            resizeImageToBase64(maskDataUrl, SIZE, SIZE),
+        ])
+
+        // Convert base64 strings to Blobs for the SDK
+        const toBlob = (b64: string): Blob => {
+            const byteChars = atob(b64)
+            const byteNums = new Array(byteChars.length)
+            for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i)
+            return new Blob([new Uint8Array(byteNums)], { type: 'image/png' })
+        }
+
+        const hf = new HfInference(HF_TOKEN)
+
+        const resultBlob = await hf.imageToImage({
+            model: 'runwayml/stable-diffusion-inpainting',
+            inputs: toBlob(imageB64),
+            parameters: {
+                mask_image: toBlob(maskB64),
+                prompt: 'empty room interior, clean wall, hardwood floor, no furniture, photorealistic, high quality, seamless texture',
+                negative_prompt: 'furniture, sofa, chair, table, cabinet, object, item, blurry, artifacts',
+                num_inference_steps: 25,
+                guidance_scale: 7.5,
+                strength: 0.99,
+            } as any,
+        })
+
         return new Promise((resolve, reject) => {
             const reader = new FileReader()
             reader.onloadend = () => resolve(reader.result as string)
             reader.onerror = reject
-            reader.readAsDataURL(blob)
+            reader.readAsDataURL(resultBlob)
         })
     }
 

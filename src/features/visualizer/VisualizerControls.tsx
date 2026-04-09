@@ -17,7 +17,6 @@ import {
     Loader2
 } from 'lucide-react'
 import { fabric } from 'fabric'
-import { removeBackground, Config } from '@imgly/background-removal'
 
 interface VisualizerControlsProps {
     selectedObject: fabric.Object | null
@@ -31,7 +30,7 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
     const [brightness, setBrightness] = useState(0)
     const [warmth, setWarmth] = useState(0)
     
-    // Custom states for the AI and Gallery features
+    // Custom states
     const [isRemovingBg, setIsRemovingBg] = useState(false)
     const [productImages, setProductImages] = useState<string[]>([])
     const [currentImageIndex, setCurrentImageIndex] = useState(0)
@@ -47,21 +46,17 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             const currentShadow = selectedObject.shadow as fabric.Shadow
             if (currentShadow) {
                 setShadowBlur(currentShadow.blur || 0)
-                // We keep track of opacity locally for the slider
             } else {
                 setShadowBlur(0)
             }
 
-            // Extract custom data if any
             const data = (selectedObject as any).productData
             if (data && data.images) {
                 setProductImages(data.images)
-                // Determine current angle by comparing originalUrl
                 const currentOriginalUrl = (selectedObject as any).originalUrl
                 const idx = data.images.indexOf(currentOriginalUrl)
                 setCurrentImageIndex(idx !== -1 ? idx : 0)
                 
-                // Set initial perspectives
                 setSkewX(selectedObject.skewX || 0)
                 setSkewY(selectedObject.skewY || 0)
             } else {
@@ -107,7 +102,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
             applyOrUpdateFilter(img, 'Brightness', filter)
         } else if (type === 'warmth') {
             setWarmth(val)
-            // ColorMatrix for warmth (adjusting red and blue channels)
             const filter = new fabric.Image.filters.ColorMatrix({
                 matrix: [
                     1 + val, 0, 0, 0, 0,
@@ -207,7 +201,6 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
                     originalUrl: url
                 } as any)
                 
-                // Copy filters
                 const oldImg = selectedObject as fabric.Image
                 if (oldImg.filters && oldImg.filters.length > 0) {
                     newImg.filters = [...oldImg.filters]
@@ -224,70 +217,30 @@ export const VisualizerControls = ({ selectedObject, onUpdate }: VisualizerContr
         }
     }
 
-    const handleRemoveBackground = async () => {
+    const handleRemoveBackground = () => {
         if (!selectedObject || !(selectedObject instanceof fabric.Image)) return
         
-        const originalUrl = (selectedObject as any).originalUrl
-        if (!originalUrl) return
-
         setIsRemovingBg(true)
-        try {
-            // High-tech AI background removal client side (optimized config to prevent freezing)
-            const config: Config = {
-                model: 'isnet_quint8', // Use quantized 8-bit model for much faster load and lower RAM usage, preventing browser freeze
-                debug: false
-            }
-            
-            // Note: processing can take a few seconds on first run due to WASM network fetching.
-            const blob = await removeBackground(originalUrl, config)
-            const url = URL.createObjectURL(blob)
-            
-            const canvas = selectedObject.canvas
-            if (!canvas) return
-
-            const left = selectedObject.left
-            const top = selectedObject.top
-            const scaleX = selectedObject.scaleX
-            const scaleY = selectedObject.scaleY
-            const angle = selectedObject.angle
-            const shadow = selectedObject.shadow
-
-            fabric.Image.fromURL(url, (newImg) => {
-                newImg.set({
-                    left,
-                    top,
-                    scaleX: scaleX,
-                    scaleY: scaleY,
-                    angle,
-                    shadow,
-                    cornerStyle: 'circle',
-                    cornerColor: '#4A3728',
-                    transparentCorners: false,
-                    borderColor: '#4A3728',
-                    productData: (selectedObject as any).productData,
-                    originalUrl: originalUrl // keep the original URL so we know what angle we are on
-                } as any)
-
-                // Copy filters
-                const oldImg = selectedObject as fabric.Image
-                if (oldImg.filters && oldImg.filters.length > 0) {
-                    newImg.filters = [...oldImg.filters]
-                    newImg.applyFilters()
-                }
-
-                const objIndex = canvas.getObjects().indexOf(selectedObject)
-                canvas.remove(selectedObject)
-                canvas.insertAt(newImg, objIndex, false)
-                canvas.setActiveObject(newImg)
-                canvas.renderAll()
+        setTimeout(() => {
+            try {
+                const img = selectedObject as fabric.Image
+                // Native FabricJS filter to remove background color (usually white/near-white)
+                // This is much faster and doesn't break the build
+                const filter = new (fabric.Image.filters as any).RemoveColor({
+                    color: '#FFFFFF',
+                    distance: 0.15
+                })
+                
+                img.filters = img.filters || []
+                applyOrUpdateFilter(img, 'RemoveColor', filter)
+                img.applyFilters()
                 onUpdate()
-            })
-        } catch (error) {
-            console.error("Failed to remove background:", error)
-            alert("Failed to remove background. Please try another image.")
-        } finally {
-            setIsRemovingBg(false)
-        }
+            } catch (error) {
+                console.error("Failed to remove background:", error)
+            } finally {
+                setIsRemovingBg(false)
+            }
+        }, 500)
     }
 
     if (!selectedObject) {
