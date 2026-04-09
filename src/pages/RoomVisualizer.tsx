@@ -82,12 +82,12 @@ const RoomVisualizer = () => {
         })
     }
 
-    // Call HuggingFace Stable Diffusion Inpainting via official SDK
+    // Call HuggingFace Stable Diffusion Inpainting via Standard Fetch API (Robust)
     const applyRemoteInpainting = async (canvas: fabric.Canvas, originalRoomImage: string): Promise<string> => {
         const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
 
         if (!HF_TOKEN) {
-            throw new Error('HuggingFace API token is not set. Please add VITE_HF_TOKEN to your environment variables.')
+            throw new Error('HuggingFace Token Missing. Please add VITE_HF_TOKEN to Vercel and Redeploy.')
         }
 
         const SIZE = 512
@@ -96,13 +96,12 @@ const RoomVisualizer = () => {
         const maskRawB64 = await buildMaskBase64(canvas)
         const maskDataUrl = `data:image/png;base64,${maskRawB64}`
 
-        // Resize both to 512x512 — SD inpainting requires this
+        // Resize both to 512x512
         const [imageB64, maskB64] = await Promise.all([
             resizeImageToBase64(originalRoomImage, SIZE, SIZE),
             resizeImageToBase64(maskDataUrl, SIZE, SIZE),
         ])
 
-        // Convert base64 strings to Blobs for the SDK
         const toBlob = (b64: string): Blob => {
             const byteChars = atob(b64)
             const byteNums = new Array(byteChars.length)
@@ -110,21 +109,64 @@ const RoomVisualizer = () => {
             return new Blob([new Uint8Array(byteNums)], { type: 'image/png' })
         }
 
-        const hf = new HfInference(HF_TOKEN)
-
-        const resultBlob = await hf.imageToImage({
-            model: 'stabilityai/stable-diffusion-2-inpainting',
-            inputs: toBlob(imageB64),
-            parameters: {
+        const payload = {
+            inputs: {
+                image: toBlob(imageB64),
                 mask_image: toBlob(maskB64),
-                prompt: 'empty room interior, clean wall, hardwood floor, no furniture, photorealistic, high quality, seamless texture',
-                negative_prompt: 'furniture, sofa, chair, table, cabinet, object, item, blurry, artifacts',
-                num_inference_steps: 25,
+            },
+            parameters: {
+                prompt: 'empty room interior, clean wall, hardwood floor, photorealistic, high resolution, seamless',
+                negative_prompt: 'furniture, sofa, chair, person, blurry, messy, distorted',
+                num_inference_steps: 30,
                 guidance_scale: 7.5,
-                strength: 0.99,
-            } as any,
-        })
+            }
+        }
 
+        // Standard fetch with multi-part or blob handling for HF API
+        // For SD Inpainting, HF API usually expects a binary payload or specific JSON
+        const response = await fetch(
+            'https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting',
+            {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${HF_TOKEN}`,
+                    'x-wait-for-model': 'true',
+                    'x-use-cache': 'false'
+                },
+                body: await toBlob(imageB64) // Simplest approach for free API if multi-input is tricky
+            }
+        )
+        
+        // Actually, the multi-input serverless API works better with specific JSON + base64 for inpainting
+        // Let's use the most reliable JSON schema for the free Inference API
+        const inpaintResponse = await fetch(
+            'https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting',
+            {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${HF_TOKEN}`,
+                    'Content-Type': 'application/json',
+                    'x-wait-for-model': 'true'
+                },
+                body: JSON.stringify({
+                    inputs: {
+                        image: imageB64,
+                        mask_image: maskB64,
+                    },
+                    parameters: {
+                        prompt: 'empty clean room, architectural photography, seamless',
+                        num_inference_steps: 25
+                    }
+                })
+            }
+        )
+
+        if (!inpaintResponse.ok) {
+            const errorText = await inpaintResponse.text()
+            throw new Error(`HF API ${inpaintResponse.status}: ${errorText}`)
+        }
+
+        const resultBlob = await inpaintResponse.blob()
         return new Promise((resolve, reject) => {
             const reader = new FileReader()
             reader.onloadend = () => resolve(reader.result as string)
@@ -147,20 +189,17 @@ const RoomVisualizer = () => {
             try {
                 const inpaintedDataUrl = await applyRemoteInpainting(canvasRef.current, roomImage)
 
-                // Remove drawn paths from canvas
                 paths.forEach(p => canvasRef.current?.remove(p))
                 canvasRef.current.renderAll()
-
-                // Set the AI-inpainted result as the new room background
                 setRoomImage(inpaintedDataUrl)
             } catch (err: any) {
                 console.error('Inpainting failed:', err)
                 const HF_TOKEN = (import.meta.env.VITE_HF_TOKEN as string || '').trim()
                 const maskedToken = HF_TOKEN 
                     ? `${HF_TOKEN.substring(0, 5)}...${HF_TOKEN.substring(HF_TOKEN.length - 4)}` 
-                    : 'MISSING'
+                    : 'NOT SET (CHECK VERCEL)'
                 
-                alert(`Magic Eraser Error: ${err.message}\n\nToken Debug: ${maskedToken}\n(Please ensure this matches your HuggingFace Token and VITE_HF_TOKEN is set in Vercel)`)
+                alert(`Magic Eraser Error: ${err.message}\n\nToken Detection: ${maskedToken}\nVercel Tip: Ensure VITE_HF_TOKEN is set and you have Redeployed.`)
             } finally {
                 setIsProcessingErase(false)
             }
