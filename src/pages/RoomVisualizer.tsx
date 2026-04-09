@@ -113,7 +113,7 @@ const RoomVisualizer = () => {
         const hf = new HfInference(HF_TOKEN)
 
         const resultBlob = await hf.imageToImage({
-            model: 'runwayml/stable-diffusion-inpainting',
+            model: 'stabilityai/stable-diffusion-2-inpainting',
             inputs: toBlob(imageB64),
             parameters: {
                 mask_image: toBlob(maskB64),
