@@ -12,6 +12,7 @@
     "dependencies": {
         "@hookform/resolvers": "^3.3.0",
         "@huggingface/inference": "^4.13.15",
+        "@imgly/background-removal": "^1.7.0",
         "@radix-ui/react-dialog": "latest",
         "@radix-ui/react-dropdown-menu": "latest",
         "@radix-ui/react-select": "latest",
