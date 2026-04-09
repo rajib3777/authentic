@@ -30,18 +30,16 @@ const RoomVisualizer = () => {
     
     const [isDrawingMode, setIsDrawingMode] = useState(false)
     const [isProcessingErase, setIsProcessingErase] = useState(false)
-    const [brushSize, setBrushSize] = useState(40)
+    const [brushSize] = useState(40)
 
-    // Core pixel-level inpainting: fills masked (red) pixels by iteratively
-    // averaging their non-masked neighbors. Runs multiple passes until filled.
-    const applyPixelInpainting = async (canvas: fabric.Canvas): Promise<string> => {
+    // Builds a black-and-white mask image from the red drawn paths on the canvas
+    const buildMaskBase64 = async (canvas: fabric.Canvas): Promise<string> => {
         const W = canvas.width!
         const H = canvas.height!
 
-        // Export full canvas (background + red paths) to an image
-        const dataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 })
+        // Export full canvas (room image + red paths drawn by user)
+        const exportedDataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 })
 
-        // Draw exported image on an offscreen canvas
         const offscreen = document.createElement('canvas')
         offscreen.width = W
         offscreen.height = H
@@ -50,67 +48,93 @@ const RoomVisualizer = () => {
         await new Promise<void>((resolve) => {
             const img = new Image()
             img.onload = () => { ctx.drawImage(img, 0, 0, W, H); resolve() }
-            img.src = dataUrl
+            img.src = exportedDataUrl
         })
 
-        // Get pixel data
         const imgData = ctx.getImageData(0, 0, W, H)
-        const data = imgData.data
+        const d = imgData.data
 
-        // Identify masked pixels:
-        // The brush color was rgba(239, 68, 68, 0.5), which when composited on
-        // any pixel turns it noticeably more red than green/blue
-        const masked = new Uint8Array(W * H)
+        // Convert: red pixels → white (area to inpaint), all else → black (keep)
         for (let i = 0; i < W * H; i++) {
-            const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2]
-            // Heuristic: strongly reddish pixel = mask
-            if (r > 160 && r - g > 60 && r - b > 60) {
-                masked[i] = 1
-            }
-        }
-
-        // Iterative inpainting: repeat until no un-filled masked pixels remain
-        // Each pass: for each masked pixel, average all non-masked neighbors
-        const PASSES = 80
-        for (let pass = 0; pass < PASSES; pass++) {
-            let changed = false
-            for (let y = 0; y < H; y++) {
-                for (let x = 0; x < W; x++) {
-                    const idx = y * W + x
-                    if (!masked[idx]) continue
-
-                    let rSum = 0, gSum = 0, bSum = 0, count = 0
-                    // Sample 8-connected neighborhood
-                    for (let dy = -1; dy <= 1; dy++) {
-                        for (let dx = -1; dx <= 1; dx++) {
-                            if (dx === 0 && dy === 0) continue
-                            const nx = x + dx, ny = y + dy
-                            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
-                            const nIdx = ny * W + nx
-                            if (!masked[nIdx]) {
-                                rSum += data[nIdx * 4]
-                                gSum += data[nIdx * 4 + 1]
-                                bSum += data[nIdx * 4 + 2]
-                                count++
-                            }
-                        }
-                    }
-
-                    if (count > 0) {
-                        data[idx * 4]     = Math.round(rSum / count)
-                        data[idx * 4 + 1] = Math.round(gSum / count)
-                        data[idx * 4 + 2] = Math.round(bSum / count)
-                        data[idx * 4 + 3] = 255
-                        masked[idx] = 0   // Mark as filled so neighbors can use it
-                        changed = true
-                    }
-                }
-            }
-            if (!changed) break   // All masked pixels filled, stop early
+            const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2]
+            const isRed = r > 160 && r - g > 55 && r - b > 55
+            const v = isRed ? 255 : 0
+            d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255
         }
 
         ctx.putImageData(imgData, 0, 0)
-        return offscreen.toDataURL('image/png')
+        return offscreen.toDataURL('image/png').split('base64,')[1]
+    }
+
+    // Resize an image dataURL to target dimensions for HF API (512x512 or 768x768)
+    const resizeImageToBase64 = (dataUrl: string, targetW: number, targetH: number): Promise<string> => {
+        return new Promise((resolve) => {
+            const img = new Image()
+            img.onload = () => {
+                const c = document.createElement('canvas')
+                c.width = targetW; c.height = targetH
+                const ctx = c.getContext('2d')!
+                ctx.drawImage(img, 0, 0, targetW, targetH)
+                resolve(c.toDataURL('image/png').split('base64,')[1])
+            }
+            img.src = dataUrl
+        })
+    }
+
+    // Call HuggingFace Stable Diffusion Inpainting API
+    const applyRemoteInpainting = async (canvas: fabric.Canvas, originalRoomImage: string): Promise<string> => {
+        const HF_TOKEN = import.meta.env.VITE_HF_TOKEN as string
+
+        // SD Inpainting requires 512x512 or 768x768
+        const SIZE = 512
+
+        // Prepare image and mask (both resized to 512x512)
+        const [imageB64, maskB64] = await Promise.all([
+            resizeImageToBase64(originalRoomImage, SIZE, SIZE),
+            buildMaskBase64(canvas).then(async (rawMask) => {
+                // rawMask is already base64 at canvas resolution, resize it too
+                const maskDataUrl = `data:image/png;base64,${rawMask}`
+                return resizeImageToBase64(maskDataUrl, SIZE, SIZE)
+            })
+        ])
+
+        const response = await fetch(
+            'https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting',
+            {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${HF_TOKEN}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    inputs: 'empty room interior, clean floor, bare wall, no furniture, photorealistic, high quality, seamless',
+                    parameters: {
+                        image: imageB64,
+                        mask_image: maskB64,
+                        strength: 0.99,
+                        num_inference_steps: 25,
+                        guidance_scale: 7.5,
+                    },
+                }),
+            }
+        )
+
+        if (!response.ok) {
+            const errorBody = await response.text()
+            // Model might be loading (503), retry after delay
+            if (response.status === 503) {
+                throw new Error('Model is loading. Please wait 30 seconds and try again.')
+            }
+            throw new Error(`API error ${response.status}: ${errorBody}`)
+        }
+
+        const blob = await response.blob()
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result as string)
+            reader.onerror = reject
+            reader.readAsDataURL(blob)
+        })
     }
 
     const toggleMagicEraser = async () => {
@@ -124,20 +148,18 @@ const RoomVisualizer = () => {
             if (paths.length === 0) return
 
             setIsProcessingErase(true)
-
             try {
-                // Run real pixel inpainting
-                const inpaintedDataUrl = await applyPixelInpainting(canvasRef.current)
+                const inpaintedDataUrl = await applyRemoteInpainting(canvasRef.current, roomImage)
 
-                // Remove the drawn brush paths
+                // Remove drawn paths from canvas
                 paths.forEach(p => canvasRef.current?.remove(p))
                 canvasRef.current.renderAll()
 
-                // Set the inpainted image as the new room background
-                // This triggers VisualizerCanvas to reload with the clean image
+                // Set the AI-inpainted result as the new room background
                 setRoomImage(inpaintedDataUrl)
-            } catch (err) {
+            } catch (err: any) {
                 console.error('Inpainting failed:', err)
+                alert(`Magic Eraser failed: ${err.message}`)
             } finally {
                 setIsProcessingErase(false)
             }
